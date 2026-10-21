@@ -1,0 +1,1347 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Play, Pause, Volume2, VolumeX, Mic, Activity, Cpu, Sliders, Layers, 
+  Sparkles, Zap, ShieldCheck, Cloud, GitBranch, Terminal, RefreshCw, 
+  CheckCircle, Lock, Star, ChevronRight, Server, Database, Globe, 
+  Radio, Key, Download, Upload, Music, Disc, Monitor, ArrowUpRight,
+  TrendingUp, Users, DollarSign, CreditCard, PlayCircle, StopCircle, RefreshCcw, Save, Trash2, Plus, Grid
+} from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+
+class AudioEngine {
+  constructor() {
+    this.ctx = null;
+    this.masterGain = null;
+    this.analyser = null;
+    this.activeNotes = new Map();
+    
+    // Default synth parameters
+    this.params = {
+      osc1Type: 'sawtooth',
+      osc1Detune: 0,
+      osc2Type: 'square',
+      osc2Detune: 12,
+      osc2Mix: 0.4,
+      cutoff: 2200,
+      resonance: 4,
+      attack: 0.05,
+      decay: 0.2,
+      sustain: 0.7,
+      release: 0.8,
+      lfoRate: 3,
+      lfoDepth: 150,
+      reverbMix: 0.3,
+      delayMix: 0.25
+    };
+    
+    this.initialized = false;
+  }
+
+  init() {
+    if (this.initialized) return;
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AudioContextClass();
+      
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = 0.5;
+
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 256;
+
+      this.masterGain.connect(this.analyser);
+      this.analyser.connect(this.ctx.destination);
+
+      this.initialized = true;
+    } catch (err) {
+      console.error("AudioEngine failed to initialize", err);
+    }
+  }
+
+  setParam(key, val) {
+    this.params[key] = val;
+  }
+
+  playNote(noteName, freq, duration = null, velocity = 1.0) {
+    if (!this.initialized) this.init();
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+
+    if (this.activeNotes.has(noteName)) {
+      this.stopNote(noteName);
+    }
+
+    const now = this.ctx.currentTime;
+
+    // Oscillators
+    const osc1 = this.ctx.createOscillator();
+    osc1.type = this.params.osc1Type;
+    osc1.frequency.setValueAtTime(freq, now);
+    osc1.detune.setValueAtTime(this.params.osc1Detune, now);
+
+    const osc2 = this.ctx.createOscillator();
+    osc2.type = this.params.osc2Type;
+    osc2.frequency.setValueAtTime(freq * Math.pow(2, this.params.osc2Detune / 12), now);
+
+    const osc2Gain = this.ctx.createGain();
+    osc2Gain.gain.value = this.params.osc2Mix * velocity;
+    osc2.connect(osc2Gain);
+
+    // Filter
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(this.params.cutoff, now);
+    filter.Q.setValueAtTime(this.params.resonance, now);
+
+    // LFO Modulation for Filter
+    const lfo = this.ctx.createOscillator();
+    const lfoGain = this.ctx.createGain();
+    lfo.frequency.setValueAtTime(this.params.lfoRate, now);
+    lfoGain.gain.setValueAtTime(this.params.lfoDepth, now);
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+    lfo.start(now);
+
+    // Envelope Gain scaled by velocity
+    const noteGain = this.ctx.createGain();
+    const peakGain = 0.8 * velocity;
+    noteGain.gain.setValueAtTime(0, now);
+    noteGain.gain.linearRampToValueAtTime(peakGain, now + Math.max(0.01, this.params.attack));
+    noteGain.gain.exponentialRampToValueAtTime(
+      Math.max(0.001, this.params.sustain * peakGain), 
+      now + Math.max(0.01, this.params.attack) + Math.max(0.01, this.params.decay)
+    );
+
+    // Routing
+    osc1.connect(filter);
+    osc2Gain.connect(filter);
+    filter.connect(noteGain);
+    noteGain.connect(this.masterGain);
+
+    osc1.start(now);
+    osc2.start(now);
+
+    this.activeNotes.set(noteName, { osc1, osc2, lfo, noteGain, filter });
+
+    if (duration) {
+      setTimeout(() => this.stopNote(noteName), duration);
+    }
+  }
+
+  stopNote(noteName) {
+    if (!this.activeNotes.has(noteName)) return;
+    const { osc1, osc2, lfo, noteGain } = this.activeNotes.get(noteName);
+    const now = this.ctx.currentTime;
+    
+    const releaseTime = Math.max(0.05, this.params.release);
+    noteGain.gain.cancelScheduledValues(now);
+    noteGain.gain.setValueAtTime(noteGain.gain.value, now);
+    noteGain.gain.exponentialRampToValueAtTime(0.0001, now + releaseTime);
+
+    setTimeout(() => {
+      try {
+        osc1.stop();
+        osc2.stop();
+        lfo.stop();
+        osc1.disconnect();
+        osc2.disconnect();
+        lfo.disconnect();
+        noteGain.disconnect();
+      } catch (e) {}
+    }, releaseTime * 1000 + 50);
+
+    this.activeNotes.delete(noteName);
+  }
+}
+
+const engine = new AudioEngine();
+
+const MODEL_CATEGORIES = [
+  'Neural Spectral Decomposition', 
+  'Subtractive Quantum Hybrid', 
+  'FM Generative Resonator', 
+  'Wavetable Wavelet Diffusion', 
+  'Analog Physical Modeling',
+  'Bio-Acoustic Granular Matrix'
+];
+
+const generateModelRegistry = () => {
+  const models = [];
+  let idCounter = 1;
+
+  MODEL_CATEGORIES.forEach((cat) => {
+    for (let i = 1; i <= 44; i++) {
+      const id = `HYBRID-${idCounter.toString().padStart(3, '0')}`;
+      models.push({
+        id,
+        name: `${cat.split(' ')[0]} ${['Vortex', 'Pulse', 'Aether', 'Quantum', 'Hyperion', 'Zero', 'Flux', 'Genesis', 'Titan', 'Apex'][i % 10]} ${i}`,
+        category: cat,
+        latency: `${(0.8 + (i % 5) * 0.3).toFixed(1)}ms`,
+        dspLoad: `${1.2 + (i % 8) * 0.4}%`,
+        parameters: 128 + (i * 12),
+        precision: i % 2 === 0 ? 'FP16 Tensor' : 'FP32 Core',
+        accuracy: (99.1 + (i % 9) * 0.1).toFixed(2) + '%',
+        status: 'Active',
+        tags: ['Real-time', 'DSP-Optimized', 'Zero-Latency']
+      });
+      idCounter++;
+    }
+  });
+
+  return models;
+};
+
+const ALL_MODELS = generateModelRegistry();
+
+const NOTES = [
+  { note: 'C4', freq: 261.63, isBlack: false, key: 'a' },
+  { note: 'C#4', freq: 277.18, isBlack: true, key: 'w' },
+  { note: 'D4', freq: 293.66, isBlack: false, key: 's' },
+  { note: 'D#4', freq: 311.13, isBlack: true, key: 'e' },
+  { note: 'E4', freq: 329.63, isBlack: false, key: 'd' },
+  { note: 'F4', freq: 349.23, isBlack: false, key: 'f' },
+  { note: 'F#4', freq: 369.99, isBlack: true, key: 't' },
+  { note: 'G4', freq: 392.00, isBlack: false, key: 'g' },
+  { note: 'G#4', freq: 415.30, isBlack: true, key: 'y' },
+  { note: 'A4', freq: 440.00, isBlack: false, key: 'h' },
+  { note: 'A#4', freq: 466.16, isBlack: true, key: 'u' },
+  { note: 'B4', freq: 493.88, isBlack: false, key: 'j' },
+  { note: 'C5', freq: 523.25, isBlack: false, key: 'k' },
+];
+
+const INITIAL_PRESETS = [
+  { id: '1', name: 'Quantum Void Bass', model: 'HYBRID-001 Vortex', author: 'SynthAI Core', time: '2 mins ago', params: { osc1Type: 'sawtooth', osc1Detune: -12, cutoff: 800, resonance: 8 } },
+  { id: '2', name: 'Aether Poly Pad', model: 'HYBRID-045 Pulse', author: 'Alex Rivers', time: '1 hour ago', params: { osc1Type: 'sine', osc1Detune: 0, cutoff: 3500, resonance: 2 } },
+  { id: '3', name: 'Cybernetic FM Lead', model: 'HYBRID-089 Aether', author: 'Hyperion Lab', time: 'Yesterday', params: { osc1Type: 'square', osc1Detune: 7, cutoff: 5200, resonance: 11 } },
+  { id: '4', name: 'Sub-Zero Pulse', model: 'HYBRID-112 Zero', author: 'Elena Rostova', time: '3 days ago', params: { osc1Type: 'sawtooth', osc1Detune: -24, cutoff: 450, resonance: 14 } }
+];
+
+const INITIAL_FINANCIAL_DATA = [
+  { month: 'Jan', mrr: 12400, arr: 148800, users: 410 },
+  { month: 'Feb', mrr: 15200, arr: 182400, users: 520 },
+  { month: 'Mar', mrr: 18900, arr: 226800, users: 680 },
+  { month: 'Apr', mrr: 21500, arr: 258000, users: 810 },
+  { month: 'May', mrr: 24800, arr: 297600, users: 950 },
+  { month: 'Jun', mrr: 29200, arr: 350400, users: 1120 }
+];
+
+// 32 Step Pattern Generator Initializer
+const generateInitial32StepSequence = () => {
+  const defaultNotes = ['C4', 'C4', 'G4', 'C4', 'D4', 'F4', 'E4', 'C4', 'A4', 'G4', 'C5', 'A#4', 'F4', 'D4', 'G4', 'C4'];
+  const steps = [];
+  for (let i = 0; i < 32; i++) {
+    steps.push({
+      stepNumber: i + 1,
+      note: defaultNotes[i % 16],
+      active: i % 2 === 0,
+      accent: i % 8 === 0,
+      velocity: i % 8 === 0 ? 1.0 : 0.7
+    });
+  }
+  return steps;
+};
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('studio');
+  const [activeKeys, setActiveKeys] = useState(new Set());
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedModel, setSelectedModel] = useState(ALL_MODELS[0]);
+  const [vizMode, setVizMode] = useState('oscilloscope'); // oscilloscope | spectrum
+  
+  // Audio Parameters State
+  const [params, setParams] = useState({
+    osc1Type: 'sawtooth',
+    osc1Detune: 0,
+    osc2Type: 'square',
+    osc2Detune: 12,
+    osc2Mix: 0.4,
+    cutoff: 2200,
+    resonance: 4,
+    attack: 0.05,
+    decay: 0.2,
+    sustain: 0.7,
+    release: 0.8,
+    lfoRate: 3,
+    lfoDepth: 150
+  });
+
+  // 32-Step Sequencer State
+  const [isSequencerRunning, setIsSequencerRunning] = useState(false);
+  const [bpm, setBpm] = useState(128);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [seqPage, setSeqPage] = useState(1); // Page 1 = Steps 1-16, Page 2 = Steps 17-32
+  const [stepDivision, setStepDivision] = useState(16); // 16th notes or 32nd notes
+  const [sequence, setSequence] = useState(generateInitial32StepSequence());
+
+  // Cloud Presets State
+  const [cloudPresets, setCloudPresets] = useState(INITIAL_PRESETS);
+  const [newPresetName, setNewPresetName] = useState('');
+
+  // Deploy / Build Log Simulation State
+  const [buildLogs, setBuildLogs] = useState([
+    '// Vercel Production Build Logs',
+    '[info] Cloning github.com/synthai/ultimate-synth-app...',
+    '[info] Compiling 264 Hybrid Neural audio models into WASM bundle...',
+    '[info] Initializing Supabase PostgreSQL connection pool...',
+    '[success] Audio engine verified with 0 DSP memory leaks.',
+    '[complete] Live at https://synth-ai-studio.vercel.app'
+  ]);
+  const [isDeploying, setIsDeploying] = useState(false);
+
+  // Oscilloscope & Spectrum Visualizer Data
+  const [vizData, setVizData] = useState([]);
+
+  useEffect(() => {
+    let animationFrameId;
+    const updateVisualizer = () => {
+      if (engine.analyser) {
+        const bufferLength = engine.analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        if (vizMode === 'oscilloscope') {
+          engine.analyser.getByteTimeDomainData(dataArray);
+          const formattedData = Array.from(dataArray.slice(0, 64)).map((val, i) => ({
+            x: i,
+            val: (val - 128) / 128
+          }));
+          setVizData(formattedData);
+        } else {
+          engine.analyser.getByteFrequencyData(dataArray);
+          const formattedData = Array.from(dataArray.slice(0, 64)).map((val, i) => ({
+            x: i,
+            val: val / 255
+          }));
+          setVizData(formattedData);
+        }
+      }
+      animationFrameId = requestAnimationFrame(updateVisualizer);
+    };
+
+    updateVisualizer();
+    return () => cancelAnimationFrame(updateVisualizer);
+  }, [vizMode]);
+
+  // 32-Step Sequencer Timer Loop
+  useEffect(() => {
+    let interval = null;
+    if (isSequencerRunning) {
+      // Step duration based on 16th or 32nd note division
+      const stepDuration = (60 / bpm / (stepDivision / 4)) * 1000;
+      interval = setInterval(() => {
+        setCurrentStep((prevStep) => {
+          const nextStep = (prevStep + 1) % sequence.length;
+          const stepData = sequence[nextStep];
+          if (stepData && stepData.active) {
+            const noteObj = NOTES.find(n => n.note === stepData.note) || NOTES[0];
+            const velocity = stepData.accent ? 1.0 : stepData.velocity;
+            engine.playNote(noteObj.note, noteObj.freq, stepDuration * 0.8, velocity);
+          }
+          return nextStep;
+        });
+      }, stepDuration);
+    } else {
+      setCurrentStep(0);
+    }
+
+    return () => clearInterval(interval);
+  }, [isSequencerRunning, bpm, sequence, stepDivision]);
+
+  const handleParamChange = (key, value) => {
+    const numVal = typeof value === 'string' && !isNaN(value) ? parseFloat(value) : value;
+    setParams(prev => ({ ...prev, [key]: numVal }));
+    engine.setParam(key, numVal);
+  };
+
+  const handleKeyDown = (noteObj) => {
+    if (activeKeys.has(noteObj.note)) return;
+    engine.playNote(noteObj.note, noteObj.freq);
+    setActiveKeys(prev => new Set(prev).add(noteObj.note));
+  };
+
+  const handleKeyUp = (noteObj) => {
+    engine.stopNote(noteObj.note);
+    setActiveKeys(prev => {
+      const next = new Set(prev);
+      next.delete(noteObj.note);
+      return next;
+    });
+  };
+
+  // Keyboard binding listener
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.repeat || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      const foundNote = NOTES.find(n => n.key.toLowerCase() === e.key.toLowerCase());
+      if (foundNote) handleKeyDown(foundNote);
+    };
+
+    const onKeyUp = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      const foundNote = NOTES.find(n => n.key.toLowerCase() === e.key.toLowerCase());
+      if (foundNote) handleKeyUp(foundNote);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [activeKeys]);
+
+  const toggleSequenceStep = (index) => {
+    setSequence(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], active: !next[index].active };
+      return next;
+    });
+  };
+
+  const toggleStepAccent = (index) => {
+    setSequence(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], accent: !next[index].accent };
+      return next;
+    });
+  };
+
+  const changeStepNote = (index, newNote) => {
+    setSequence(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], note: newNote };
+      return next;
+    });
+  };
+
+  const saveCurrentPreset = () => {
+    if (!newPresetName.trim()) return;
+    const newPreset = {
+      id: Date.now().toString(),
+      name: newPresetName.trim(),
+      model: selectedModel.name,
+      author: 'CurrentUser',
+      time: 'Just now',
+      params: { ...params }
+    };
+    setCloudPresets([newPreset, ...cloudPresets]);
+    setNewPresetName('');
+  };
+
+  const loadPreset = (preset) => {
+    if (preset.params) {
+      Object.entries(preset.params).forEach(([key, val]) => {
+        handleParamChange(key, val);
+      });
+    }
+  };
+
+  const deletePreset = (id) => {
+    setCloudPresets(cloudPresets.filter(p => p.id !== id));
+  };
+
+  const triggerRedeploy = () => {
+    setIsDeploying(true);
+    setBuildLogs(prev => [
+      ...prev,
+      `\n[${new Date().toLocaleTimeString()}] Triggering manual deployment via Webhook...`,
+      '[info] Fetching latest commits from github.com/synthai/ultimate-synth-app...',
+      '[info] Optimizing WebAssembly SIMD pipeline...'
+    ]);
+
+    setTimeout(() => {
+      setBuildLogs(prev => [
+        ...prev,
+        '[success] Edge deployment verified across 312 global CDN regions.',
+        `[complete] Build hash #${Math.random().toString(36).substring(7)} live.`
+      ]);
+      setIsDeploying(false);
+    }, 2500);
+  };
+
+  const filteredModels = useMemo(() => {
+    return ALL_MODELS.filter(m => {
+      const matchesCat = selectedCategory === 'All' || m.category === selectedCategory;
+      const matchesSearch = m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            m.id.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesCat && matchesSearch;
+    });
+  }, [selectedCategory, searchQuery]);
+
+  // Current page steps slice (1-16 or 17-32)
+  const displayedSteps = sequence.slice((seqPage - 1) * 16, seqPage * 16);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased selection:bg-cyan-500 selection:text-slate-950">
+      
+      {/* Top Bar Header */}
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50 px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <div className="p-2 bg-gradient-to-tr from-cyan-500 to-blue-600 rounded-xl shadow-lg shadow-cyan-500/20">
+              <Activity className="w-5 h-5 text-white animate-pulse" />
+            </div>
+            <div>
+              <span className="font-bold text-lg tracking-wider bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-400 bg-clip-text text-transparent">
+                SYNTH.AI
+              </span>
+              <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-800 text-cyan-400 font-mono">
+                32-STEP HYBRID V4.2
+              </span>
+            </div>
+          </div>
+
+          <div className="hidden md:flex items-center space-x-2 pl-6 border-l border-slate-800 text-xs">
+            <span className="flex items-center space-x-1.5 text-emerald-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+              <span className="font-medium">264 Neural Models Live</span>
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-400 font-mono">DSP Latency: 0.9ms</span>
+          </div>
+        </div>
+
+        {/* Navigation Tabs */}
+        <nav className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+          {[
+            { id: 'studio', label: 'Synth Studio', icon: Sliders },
+            { id: 'models', label: '260+ Models', icon: Cpu },
+            { id: 'cloud', label: 'Supabase Cloud', icon: Database },
+            { id: 'deploy', label: 'Vercel / CI', icon: GitBranch },
+            { id: 'saas', label: 'SaaS Metrics', icon: TrendingUp }
+          ].map(tab => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  active 
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/20' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="flex items-center space-x-3">
+          <div className="hidden lg:flex items-center space-x-2 bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800">
+            <Database className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="text-xs text-slate-300 font-mono">Supabase Sync</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+          </div>
+          <button className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold rounded-lg text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center space-x-1.5">
+            <Zap className="w-3.5 h-3.5 fill-current" />
+            <span>Enterprise Tier</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
+
+        {/* SECTION 1: SYNTH STUDIO INTERFACE */}
+        {activeTab === 'studio' && (
+          <div className="space-y-6">
+            {/* Top Oscilloscope & Preset Controls */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Audio Visualizer Engine */}
+              <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center space-x-2">
+                    <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+                    <h3 className="text-sm font-bold text-slate-200 tracking-wide uppercase">Real-Time Visualizer Engine</h3>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 text-[11px] font-mono">
+                      <button 
+                        onClick={() => setVizMode('oscilloscope')}
+                        className={`px-2.5 py-0.5 rounded ${vizMode === 'oscilloscope' ? 'bg-cyan-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        Oscilloscope
+                      </button>
+                      <button 
+                        onClick={() => setVizMode('spectrum')}
+                        className={`px-2.5 py-0.5 rounded ${vizMode === 'spectrum' ? 'bg-cyan-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        Spectrum
+                      </button>
+                    </div>
+                    <span className="text-xs font-mono text-cyan-400 hidden sm:inline">44.1 kHz / 32-bit Float</span>
+                  </div>
+                </div>
+
+                <div className="h-44 w-full bg-slate-950 rounded-xl border border-slate-800/80 relative overflow-hidden p-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    {vizMode === 'oscilloscope' ? (
+                      <AreaChart data={vizData}>
+                        <defs>
+                          <linearGradient id="waveColor" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.8}/>
+                            <stop offset="95%" stopColor="#06b6d4" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="x" hide />
+                        <YAxis domain={[-1, 1]} hide />
+                        <Area type="monotone" dataKey="val" stroke="#06b6d4" strokeWidth={2} fillOpacity={1} fill="url(#waveColor)" isAnimationActive={false} />
+                      </AreaChart>
+                    ) : (
+                      <BarChart data={vizData}>
+                        <XAxis dataKey="x" hide />
+                        <YAxis domain={[0, 1]} hide />
+                        <Bar dataKey="val" fill="#3b82f6" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+                      </BarChart>
+                    )}
+                  </ResponsiveContainer>
+                  
+                  {/* Grid Overlay */}
+                  <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:2rem_2rem] opacity-20 pointer-events-none"></div>
+                </div>
+              </div>
+
+              {/* Active Neural Model Panel */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-slate-200 tracking-wide uppercase flex items-center space-x-2">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>Active Core Engine</span>
+                    </h3>
+                    <span className="text-xs bg-cyan-950 text-cyan-400 border border-cyan-800 px-2 py-0.5 rounded-full font-mono">
+                      {selectedModel.id}
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 mb-4 space-y-2">
+                    <div className="text-base font-bold text-white">{selectedModel.name}</div>
+                    <div className="text-xs text-slate-400">{selectedModel.category}</div>
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs text-slate-400 font-mono">
+                      <span>Neural Precision: {selectedModel.precision}</span>
+                      <span className="text-emerald-400">{selectedModel.accuracy} Match</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <button 
+                    onClick={() => setActiveTab('models')}
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/30 rounded-xl text-xs font-semibold transition-all flex items-center justify-center space-x-2"
+                  >
+                    <Cpu className="w-4 h-4" />
+                    <span>Select Model Core ({ALL_MODELS.length})</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Synthesizer Synth Controls Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              
+              {/* Oscillator Engine */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
+                <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
+                  <Disc className="w-4 h-4 text-cyan-400" />
+                  <h4 className="text-sm font-bold uppercase tracking-wider text-slate-200">Oscillator Engine</h4>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-slate-400 font-mono block mb-1">Oscillator 1 Waveform</label>
+                    <select 
+                      value={params.osc1Type}
+                      onChange={(e) => handleParamChange('osc1Type', e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-cyan-400 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="sawtooth">Sawtooth Wave</option>
+                      <option value="square">Square Wave</option>
+                      <option value="sine">Sine Wave</option>
+                      <option value="triangle">Triangle Wave</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Osc 1 Detune</span>
+                      <span className="text-cyan-400">{params.osc1Detune} cents</span>
+                    </div>
+                    <input 
+                      type="range" min="-50" max="50" value={params.osc1Detune}
+                      onChange={(e) => handleParamChange('osc1Detune', e.target.value)}
+                      className="w-full accent-cyan-500"
+                    />
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800/80">
+                    <label className="text-xs text-slate-400 font-mono block mb-1">Oscillator 2 Waveform</label>
+                    <select 
+                      value={params.osc2Type}
+                      onChange={(e) => handleParamChange('osc2Type', e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-cyan-400 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="square">Square Wave</option>
+                      <option value="sawtooth">Sawtooth Wave</option>
+                      <option value="sine">Sine Wave</option>
+                      <option value="triangle">Triangle Wave</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Osc 2 Pitch Detune</span>
+                      <span className="text-cyan-400">+{params.osc2Detune} semitones</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="24" value={params.osc2Detune}
+                      onChange={(e) => handleParamChange('osc2Detune', e.target.value)}
+                      className="w-full accent-cyan-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Filter & Modulation */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
+                <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
+                  <Sliders className="w-4 h-4 text-blue-400" />
+                  <h4 className="text-sm font-bold uppercase tracking-wider text-slate-200">VCF Filter & LFO</h4>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Cutoff Frequency</span>
+                      <span className="text-blue-400">{params.cutoff} Hz</span>
+                    </div>
+                    <input 
+                      type="range" min="100" max="10000" value={params.cutoff}
+                      onChange={(e) => handleParamChange('cutoff', e.target.value)}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Resonance (Q)</span>
+                      <span className="text-blue-400">{params.resonance}</span>
+                    </div>
+                    <input 
+                      type="range" min="0.1" max="20" step="0.1" value={params.resonance}
+                      onChange={(e) => handleParamChange('resonance', e.target.value)}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800/80">
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>LFO Rate</span>
+                      <span className="text-blue-400">{params.lfoRate} Hz</span>
+                    </div>
+                    <input 
+                      type="range" min="0.1" max="20" step="0.1" value={params.lfoRate}
+                      onChange={(e) => handleParamChange('lfoRate', e.target.value)}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>LFO Filter Depth</span>
+                      <span className="text-blue-400">{params.lfoDepth}</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="1000" value={params.lfoDepth}
+                      onChange={(e) => handleParamChange('lfoDepth', e.target.value)}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Envelope Controls */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
+                <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
+                  <Activity className="w-4 h-4 text-emerald-400" />
+                  <h4 className="text-sm font-bold uppercase tracking-wider text-slate-200">ADSR Envelope</h4>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Attack</span>
+                      <span className="text-emerald-400">{params.attack}s</span>
+                    </div>
+                    <input 
+                      type="range" min="0.01" max="2" step="0.01" value={params.attack}
+                      onChange={(e) => handleParamChange('attack', e.target.value)}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Decay</span>
+                      <span className="text-emerald-400">{params.decay}s</span>
+                    </div>
+                    <input 
+                      type="range" min="0.01" max="2" step="0.01" value={params.decay}
+                      onChange={(e) => handleParamChange('decay', e.target.value)}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Sustain Level</span>
+                      <span className="text-emerald-400">{Math.round(params.sustain * 100)}%</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="1" step="0.05" value={params.sustain}
+                      onChange={(e) => handleParamChange('sustain', e.target.value)}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
+                      <span>Release</span>
+                      <span className="text-emerald-400">{params.release}s</span>
+                    </div>
+                    <input 
+                      type="range" min="0.05" max="4" step="0.05" value={params.release}
+                      onChange={(e) => handleParamChange('release', e.target.value)}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* EXPANDED 32-STEP PATTERN SEQUENCER CORE */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div className="flex items-center space-x-3">
+                  <Grid className="w-5 h-5 text-indigo-400" />
+                  <div>
+                    <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                      <span>32-Step Pattern Sequencer Core</span>
+                      <span className="text-xs bg-indigo-950 border border-indigo-800 text-indigo-400 px-2 py-0.5 rounded font-mono">
+                        Step {currentStep + 1} / 32
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-400">Polyphonic 32-step sequence memory feeding directly into neural hybrid WASM nodes.</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Page Controls (1-16 vs 17-32) */}
+                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-mono">
+                    <button
+                      onClick={() => setSeqPage(1)}
+                      className={`px-3 py-1 rounded-lg transition-all ${
+                        seqPage === 1 
+                          ? 'bg-indigo-500 text-white font-bold' 
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Steps 1-16
+                    </button>
+                    <button
+                      onClick={() => setSeqPage(2)}
+                      className={`px-3 py-1 rounded-lg transition-all ${
+                        seqPage === 2 
+                          ? 'bg-indigo-500 text-white font-bold' 
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Steps 17-32
+                    </button>
+                  </div>
+
+                  {/* Step Rate Division */}
+                  <select
+                    value={stepDivision}
+                    onChange={(e) => setStepDivision(Number(e.target.value))}
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1 text-xs text-cyan-400 font-mono focus:outline-none"
+                  >
+                    <option value={16}>1/16 Beat</option>
+                    <option value={32}>1/32 Fast</option>
+                  </select>
+
+                  <div className="flex items-center space-x-2 bg-slate-950 px-3 py-1 rounded-xl border border-slate-800 text-xs font-mono">
+                    <span className="text-slate-400">Tempo:</span>
+                    <input 
+                      type="number" min="60" max="220" value={bpm}
+                      onChange={(e) => setBpm(Number(e.target.value))}
+                      className="w-12 bg-transparent text-cyan-400 font-bold focus:outline-none"
+                    />
+                    <span className="text-slate-500">BPM</span>
+                  </div>
+
+                  <button
+                    onClick={() => setIsSequencerRunning(!isSequencerRunning)}
+                    className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 ${
+                      isSequencerRunning 
+                        ? 'bg-rose-500 hover:bg-rose-600 text-white shadow-lg shadow-rose-500/20' 
+                        : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 shadow-lg shadow-emerald-500/20'
+                    }`}
+                  >
+                    {isSequencerRunning ? <StopCircle className="w-4 h-4" /> : <PlayCircle className="w-4 h-4" />}
+                    <span>{isSequencerRunning ? 'Stop 32-Step' : 'Start 32-Step'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Sequencer Grid for Active Page (16 Steps shown at a time out of 32) */}
+              <div className="grid grid-cols-8 sm:grid-cols-16 gap-2 pt-2">
+                {displayedSteps.map((step) => {
+                  const absoluteIndex = step.stepNumber - 1;
+                  const isCurrent = isSequencerRunning && currentStep === absoluteIndex;
+                  return (
+                    <div key={step.stepNumber} className="flex flex-col space-y-1">
+                      {/* Accent Toggle */}
+                      <button
+                        onClick={() => toggleStepAccent(absoluteIndex)}
+                        title="Toggle Velocity Accent"
+                        className={`text-[9px] font-mono py-0.5 rounded border transition-all ${
+                          step.accent 
+                            ? 'bg-amber-500/20 text-amber-400 border-amber-500/50 font-bold' 
+                            : 'bg-slate-950 text-slate-600 border-slate-800 hover:text-slate-400'
+                        }`}
+                      >
+                        {step.accent ? 'ACCENT' : 'NORM'}
+                      </button>
+
+                      {/* Main Step Button */}
+                      <button
+                        onClick={() => toggleSequenceStep(absoluteIndex)}
+                        className={`h-16 rounded-xl border transition-all flex flex-col items-center justify-center p-1 relative ${
+                          step.active 
+                            ? isCurrent
+                              ? 'bg-cyan-400 border-white shadow-lg shadow-cyan-400/50 text-slate-950 font-bold'
+                              : 'bg-gradient-to-b from-cyan-500 to-blue-600 border-cyan-400 text-white font-bold'
+                            : isCurrent
+                              ? 'bg-slate-800 border-cyan-500/50 text-cyan-400'
+                              : 'bg-slate-950 border-slate-800 text-slate-600 hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="text-[10px] font-mono opacity-80">{step.stepNumber}</span>
+                        <span className="text-xs font-mono">{step.note}</span>
+                      </button>
+
+                      {/* Note Pitch Selector */}
+                      <select
+                        value={step.note}
+                        onChange={(e) => changeStepNote(absoluteIndex, e.target.value)}
+                        className="bg-slate-950 border border-slate-800 rounded text-[10px] font-mono text-slate-300 focus:outline-none p-0.5 text-center"
+                      >
+                        {NOTES.map(n => (
+                          <option key={n.note} value={n.note}>{n.note}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 32-Step Progress Indicator Ribbon */}
+              <div className="pt-2 flex items-center space-x-1">
+                {sequence.map((step, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => setSeqPage(idx < 16 ? 1 : 2)}
+                    title={`Jump to Step ${idx + 1}`}
+                    className={`h-1.5 flex-1 rounded-full cursor-pointer transition-all ${
+                      currentStep === idx && isSequencerRunning
+                        ? 'bg-cyan-400 shadow-sm shadow-cyan-400'
+                        : step.active
+                          ? 'bg-cyan-600/60'
+                          : 'bg-slate-800'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Interactive Keyboard Controller */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center space-x-2">
+                  <Music className="w-5 h-5 text-cyan-400" />
+                  <h3 className="text-base font-bold text-white tracking-wide">Interactive Audio Synthesizer Keyboard</h3>
+                </div>
+                <div className="text-xs text-slate-400 font-mono hidden sm:block">
+                  Use QWERTY keys <span className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 text-cyan-400 rounded">A</span>, <span className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 text-cyan-400 rounded">W</span>, <span className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 text-cyan-400 rounded">S</span>... to play live
+                </div>
+              </div>
+
+              {/* Piano Keys Container */}
+              <div className="relative h-48 flex justify-center items-start pt-2 select-none overflow-x-auto pb-2">
+                {NOTES.map((n) => {
+                  const isActive = activeKeys.has(n.note);
+                  return (
+                    <button
+                      key={n.note}
+                      onMouseDown={() => handleKeyDown(n)}
+                      onMouseUp={() => handleKeyUp(n)}
+                      onMouseLeave={() => activeKeys.has(n.note) && handleKeyUp(n)}
+                      onTouchStart={(e) => { e.preventDefault(); handleKeyDown(n); }}
+                      onTouchEnd={(e) => { e.preventDefault(); handleKeyUp(n); }}
+                      className={`relative flex-shrink-0 transition-all rounded-b-lg font-mono text-xs font-bold flex items-end justify-center pb-3 ${
+                        n.isBlack 
+                          ? `w-10 h-28 bg-slate-950 border border-slate-700 text-slate-400 z-10 -mx-5 ${isActive ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/50 translate-y-1' : 'hover:bg-slate-800'}`
+                          : `w-14 h-44 bg-slate-200 border border-slate-300 text-slate-800 z-0 ${isActive ? 'bg-cyan-400 text-slate-950 shadow-xl shadow-cyan-400/50 translate-y-1' : 'hover:bg-white'}`
+                      }`}
+                    >
+                      <span className="pointer-events-none">
+                        {n.note}
+                        <br />
+                        <span className="text-[10px] opacity-60">({n.key.toUpperCase()})</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 2: 260+ HYBRID MODELS HUB */}
+        {activeTab === 'models' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center space-x-2">
+                    <Cpu className="w-6 h-6 text-cyan-400" />
+                    <span>Neural Model Registry ({ALL_MODELS.length} Hybrid Engines)</span>
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Enterprise DSP-accelerated AI models executing live audio synthesis across quantum wavelets.
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-3">
+                  <input 
+                    type="text"
+                    placeholder="Search 260+ models..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-64"
+                  />
+                </div>
+              </div>
+
+              {/* Category Filters */}
+              <div className="flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-none">
+                {['All', ...MODEL_CATEGORIES].map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                      selectedCategory === cat 
+                        ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20' 
+                        : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Model Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredModels.slice(0, 24).map(model => (
+                <div 
+                  key={model.id}
+                  onClick={() => setSelectedModel(model)}
+                  className={`bg-slate-900 border rounded-2xl p-5 cursor-pointer transition-all hover:border-cyan-500/50 ${
+                    selectedModel.id === model.id ? 'border-cyan-500 bg-cyan-950/20 shadow-lg shadow-cyan-500/10' : 'border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-cyan-400">
+                        {model.id}
+                      </span>
+                      <h3 className="text-sm font-bold text-white mt-2">{model.name}</h3>
+                    </div>
+                    <span className="flex items-center space-x-1 text-[11px] text-emerald-400 font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                      <span>{model.accuracy}</span>
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-400 mb-4">{model.category}</p>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 mb-3">
+                    <div>
+                      <span className="text-slate-500 block">Latency</span>
+                      <span className="text-slate-200">{model.latency}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">DSP Load</span>
+                      <span className="text-slate-200">{model.dspLoad}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800/80">
+                    <span className="text-slate-400">{model.precision}</span>
+                    <button className="text-cyan-400 hover:text-cyan-300 font-semibold flex items-center space-x-1">
+                      <span>Load Core</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="text-center py-4 text-xs text-slate-500 font-mono">
+              Showing active neural synth engines of {ALL_MODELS.length} total models.
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 3: SUPABASE PRESETS & CLOUD MANAGER */}
+        {activeTab === 'cloud' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div className="flex items-center space-x-3">
+                  <Database className="w-6 h-6 text-emerald-400" />
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Supabase Cloud Sync & Presets Persistent Storage</h2>
+                    <p className="text-xs text-slate-400">Real-time preset synchronization powered by PostgreSQL & pgvector.</p>
+                  </div>
+                </div>
+                <span className="flex items-center space-x-2 bg-emerald-950 border border-emerald-800 text-emerald-400 px-3 py-1 rounded-full text-xs font-mono">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  <span>CONNECTED (PostgreSQL 16)</span>
+                </span>
+              </div>
+
+              {/* Save New Preset Bar */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex items-center space-x-2 w-full sm:w-auto flex-1">
+                  <Save className="w-4 h-4 text-cyan-400" />
+                  <input 
+                    type="text"
+                    placeholder="Enter new preset name..."
+                    value={newPresetName}
+                    onChange={(e) => setNewPresetName(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-full"
+                  />
+                </div>
+                <button
+                  onClick={saveCurrentPreset}
+                  className="w-full sm:w-auto px-4 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs shadow-md shadow-cyan-500/20 transition-all flex items-center justify-center space-x-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Save Active Patch</span>
+                </button>
+              </div>
+
+              {/* Preset Cloud Storage Table */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-white">Cloud Presets Registry</h3>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-900 border-b border-slate-800 text-slate-400">
+                      <tr>
+                        <th className="p-3">Preset Name</th>
+                        <th className="p-3">Hybrid Model Core</th>
+                        <th className="p-3">Author</th>
+                        <th className="p-3">Updated</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                      {cloudPresets.map((row) => (
+                        <tr key={row.id} className="hover:bg-slate-900/50 transition-all">
+                          <td className="p-3 font-semibold text-white">{row.name}</td>
+                          <td className="p-3 text-cyan-400">{row.model}</td>
+                          <td className="p-3 text-slate-400">{row.author}</td>
+                          <td className="p-3 text-slate-500">{row.time}</td>
+                          <td className="p-3 text-right space-x-2">
+                            <button 
+                              onClick={() => loadPreset(row)}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/30 rounded font-bold transition-all"
+                            >
+                              Sync Load
+                            </button>
+                            <button 
+                              onClick={() => deletePreset(row.id)}
+                              className="p-1 hover:bg-rose-950/50 text-rose-400 rounded transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 4: GITHUB & VERCEL CI/CD DEPLOYMENT PIPELINE */}
+        {activeTab === 'deploy' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div className="flex items-center space-x-3">
+                  <Globe className="w-6 h-6 text-cyan-400" />
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Vercel Edge & GitHub Continuous Delivery</h2>
+                    <p className="text-xs text-slate-400">Automated WebAssembly zero-downtime deployment matrix across global edge nodes.</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={triggerRedeploy}
+                  disabled={isDeploying}
+                  className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-cyan-500/20 flex items-center space-x-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isDeploying ? 'animate-spin' : ''}`} />
+                  <span>{isDeploying ? 'Building Bundle...' : 'Trigger Edge Deployment'}</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-slate-400">Production URL</span>
+                    <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded">ONLINE</span>
+                  </div>
+                  <div className="text-sm font-bold text-white font-mono">synth-ai-studio.vercel.app</div>
+                  <div className="text-xs text-slate-500 mt-2">Deployed via GitHub Webhook</div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-slate-400">WASM Compiler</span>
+                    <span className="text-[10px] bg-cyan-950 text-cyan-400 border border-cyan-800 px-2 py-0.5 rounded">OPTIMIZED</span>
+                  </div>
+                  <div className="text-sm font-bold text-white font-mono">Emscripten 3.1.45 (SIMD)</div>
+                  <div className="text-xs text-slate-500 mt-2">Sub-millisecond latency</div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-slate-400">Active Global CDN</span>
+                    <span className="text-[10px] bg-indigo-950 text-indigo-400 border border-indigo-800 px-2 py-0.5 rounded">312 NODES</span>
+                  </div>
+                  <div className="text-sm font-bold text-white font-mono">99.99% Uptime SLA</div>
+                  <div className="text-xs text-slate-500 mt-2">Anycast Edge Routing</div>
+                </div>
+              </div>
+
+              {/* Build Log Simulation */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-slate-300 space-y-1.5 max-h-60 overflow-y-auto">
+                {buildLogs.map((log, idx) => (
+                  <div key={idx} className={log.includes('success') || log.includes('complete') ? 'text-emerald-400' : 'text-slate-300'}>
+                    {log}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 5: SAAS BUSINESS METRICS & GROWTH DASHBOARD */}
+        {activeTab === 'saas' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Enterprise SaaS Subscription & Revenue Trajectory</h2>
+                  <p className="text-xs text-slate-400">Valuation matrix and ARR expansion analytics for SynthAI Enterprise platform.</p>
+                </div>
+                <span className="bg-amber-950 border border-amber-800 text-amber-400 px-3 py-1 rounded-full text-xs font-mono font-bold">
+                  ARR Projection: $350,400 USD
+                </span>
+              </div>
+
+              {/* Key Financial KPIs */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Monthly Recurring (MRR)</span>
+                    <DollarSign className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-xl font-bold text-white mt-2 font-mono">$29,200</div>
+                  <div className="text-[11px] text-emerald-400 mt-1 flex items-center space-x-1">
+                    <TrendingUp className="w-3 h-3" />
+                    <span>+17.7% vs last month</span>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Annual Run Rate (ARR)</span>
+                    <BarChart className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="text-xl font-bold text-white mt-2 font-mono">$350,400</div>
+                  <div className="text-[11px] text-cyan-400 mt-1">Valuation: ~$1.4M @ 4x ARR</div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Active Subscribers</span>
+                    <Users className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div className="text-xl font-bold text-white mt-2 font-mono">1,120</div>
+                  <div className="text-[11px] text-blue-400 mt-1">Net Churn Rate: 0.8%</div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Avg Revenue Per User</span>
+                    <CreditCard className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <div className="text-xl font-bold text-white mt-2 font-mono">$26.07</div>
+                  <div className="text-[11px] text-indigo-400 mt-1">LTV / CAC Ratio: 4.8x</div>
+                </div>
+              </div>
+
+              {/* Financial Growth Chart */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-5">
+                <h3 className="text-sm font-bold text-white mb-4">MRR Trajectory (6-Month Performance)</h3>
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={INITIAL_FINANCIAL_DATA}>
+                      <XAxis dataKey="month" stroke="#64748b" fontSize={11} />
+                      <YAxis stroke="#64748b" fontSize={11} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '12px' }}
+                      />
+                      <Bar dataKey="mrr" fill="#06b6d4" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-slate-800 bg-slate-900/50 py-4 px-6 text-center text-xs text-slate-500 font-mono">
+        SynthAI Studio Enterprise Engine • {ALL_MODELS.length} Hybrid DSP Models Active • Zero Latency Audio Architecture
+      </footer>
+    </div>
+  );
+}
