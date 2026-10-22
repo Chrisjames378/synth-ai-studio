@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { audioEngine } from './lib/audio/AudioEngine';
 import { ALL_MODELS, ModelCore } from './lib/models/registry';
 import { Preset } from './lib/supabase/client';
@@ -510,6 +511,7 @@ export default function App() {
           </div>
         </div>
       </footer>
+      <Analytics />
     </div>
   );
 }
